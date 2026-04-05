@@ -258,6 +258,18 @@ $ANDROID_HOME/build-tools/34.0.0/aapt2 link \
 
 2. It generates the `R.java` file inside `build/generated`. The `R.java` file is the bridge that assigns a unique integer ID to our `<string name="welcome">`, allowing our Java code to call `R.string.welcome` without crashing!
 
+> <br>
+>
+> **Why did we pass `android.jar` here?**  
+>
+> The `AndroidManifest.xml` uses attributes from the Android framework (like `android:label`, `android:versionCode`, etc.).
+>
+> During this step, `aapt2` needs to understand these attributes in order to process the Manifest correctly.
+>
+> The `android.jar` provides those framework definitions.
+>
+> <br>
+
 #### Step 3: Compile the Java Code (`javac`)
 We must compile our `MainActivity.java` and the newly generated `R.java` file together. We also must include the `android.jar` in our classpath, otherwise the compiler won't know what an `Activity` or a `TextView` is.
 
@@ -269,12 +281,26 @@ javac \
     build/generated/com/example/hello/*.java
 ```
 
-This command compiles the Java codes and produces JVM bytecode `.class` files in `build/classes/com/example/hello`. Next, these `.class` files will be converted into Dalvik bytecode.
+This command compiles the Java codes and produces JVM bytecode `.class` files in `build/classes/com/example/hello`. In the next step, these `.class` files will be converted into Dalvik bytecode.
+
+> <br>
+>
+> **What is `android.jar` actually?**
+>
+> `android.jar` is the **Android framework API** packaged as a Java library. It contains all the classes your app can use (like `Activity`, `TextView`, etc.), along with their method signatures and structure.
+>
+> This allows tools like `javac`, `aapt2`, and `d8` to understand and validate your code against a specific Android version (in our case, API 34).
+>
+> However, it does **not** contain the real implementations of these classes. It only includes **API stubs**—just enough for compilation.
+>
+> The actual implementations live on the Android device itself. At runtime, your app links against the system's Android framework, not this JAR.
+>
+> <br>
 
 #### Step 4: Convert to Dalvik Bytecode (`d8`)
 Android devices do not run standard Java `.class` files. They run highly optimized `.dex` (Dalvik Executable) files.
 
-The `--lib` flag is similar to `-classpath` in `javac`, but specifically provides the Android framework `android.jar` so that `d8` can resolve references to Android APIs without packaging them into the final `DEX` output.
+The --lib flag again points to `android.jar`, allowing `d8` to resolve Android API references.
 
 ```bash
 $ANDROID_HOME/build-tools/34.0.0/d8 \
