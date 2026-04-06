@@ -72,29 +72,14 @@ At this point, our project looks like this:
 - `build/` → all generated outputs (classes, dex, APKs)
 - `build.py` → a script that runs the entire build pipeline
 
-Our goal is simple: **Replace `build.py` with Gradle.**
+Our goal is simple: **Replace `build.py` with Gradle build script.**
 
-We are **not** changing the project structure.
-We are **not** using Android Studio.
-
-> <br>
->
-> *You might also be wondering: Are we going to use the Android Gradle Plugin (AGP)?*
->
->**Not yet.** If we immediately apply the Android Gradle Plugin, all the complexity gets hidden behind a curtain, and it will feel like magic again. To truly understand Gradle, we are going to write our own custom Gradle tasks to execute the raw SDK commands (`aapt2`, `javac`, `d8`) first.
->
-> Once we understand how Gradle task automation works, *then* we will invite AGP to the party.
->
-> <br>
-
-<br>
 
 **A Note on the Language: Groovy vs. Kotlin**
+
 Before we write our first Gradle file, we need to choose a language. Gradle build scripts can be written in two languages: Groovy (`build.gradle`) or Kotlin DSL (`build.gradle.kts`).
 
-If you look at modern Android documentation, almost everything has shifted to Kotlin. However, in this guide, we are going to use Groovy.
-
-Why? Because before writing this guide, I took a detour to learn Gradle by migrating an old Java calculator project ([Kasio](https://github.com/hethon/Kasio)), and I used Groovy for that. I am comfortable with it right now. But more importantly: the language choice simply does not matter.
+In this guide, we are going to use Groovy.
 
 Whether you write your script in Groovy or Kotlin, Gradle builds the exact same graph in memory and executes the exact same steps. Our goal is to understand the concepts of build automation: inputs, outputs, task dependencies, and execution. Once you understand the concepts, switching the syntax later is trivial.
 
@@ -109,23 +94,32 @@ touch build.gradle
 In our Python script, the very first thing we did was define our environment variables and paths. We can do the exact same thing at the top of our `build.gradle` file:
 
 ```groovy
+// Read the ANDROID_HOME environment variable from your system
 def androidHome = System.getenv("ANDROID_HOME")
 
 if (androidHome == null) {
     throw new GradleException("ANDROID_HOME environment variable is not set!")
 }
 
+// Define the paths we need for our build tools
 def buildTools = "${androidHome}/build-tools/34.0.0"
 def platformJar = "${androidHome}/platforms/android-34/android.jar"
 
-def ksPassword='superSecret123'
-def ksFileName='mykey'
-def ksAlias='mykey'
+// Keystore configuration
+def ksPassword = 'superSecret123'
+def ksFileName = 'mykey.keystore'
+def ksAlias = 'mykey'
 ```
 
 > <br>
 >
-> Notice the keysote related variables we defined: ksPassword, ksFileName and ksAlias. We will use them later to generate keystore without our intervention. In a real project you wound't expose your keystore related info, they must be kept secret thus you would store them in .env file or gradle.properties.
+> ⚠️ **A note on Security:**
+>
+> You'll notice we defined our keystore password and alias directly in the script. While this is convenient for a learning project, **never do this in a professional or production environment.**
+>
+> Exposing your signing credentials in plain text is a security risk. In a real-world project, you would store these sensitive values in a `gradle.properties` file or an environment variable, and then instruct Gradle to read them from there. This allows you to exclude the secrets file from your Git repository (using `.gitignore`), keeping your passwords safe while still allowing the build system to access them.
+>
+> For our journey, hardcoding them keeps the focus on the **build process** rather than the security setup, but always keep this "Production-Ready" approach in the back of your mind!
 >
 > <br>
 
@@ -133,7 +127,7 @@ def ksAlias='mykey'
 
 In Gradle, everything is a Task. A task represents a single atomic piece of work for a build, such as compiling classes.
 
-In our Python script, Step 1 was compiling our XML resources using aapt2:
+In our Python script, Step 1 was compiling our XML resources using `aapt2`:
 ```python
 # The Python way
 subprocess.check_call([
@@ -168,9 +162,7 @@ BUILD SUCCESSFUL in 5s
 1 actionable task: 1 executed
 ```
 
-Gradle successfully ran aapt2 and generated our compiled resources. So far, it feels exactly like our Python script.
-
-But here is where the magic happens. Run the exact same command a second time:
+Gradle successfully ran `aapt2` and generated our compiled resources. So far, it feels exactly like our Python script. But here is where we see the difference. Run the exact same command a second time:
 ```bash
 gradle compileResources
 ```
@@ -183,11 +175,11 @@ BUILD SUCCESSFUL in 744ms
 
 **Notice the UP-TO-DATE text?**
 
-Gradle didn't run the aapt2 command. It finished in a far less amount of time, 744ms in my case.
+Gradle didn't run the `aapt2` command. It finished in a far less amount of time, 744ms in my case.
 
-Because we explicitly told Gradle what the inputs (src/main/res) and outputs (build/res) were, Gradle generated a cryptographic hash of those folders. On the second run, Gradle looked at the folders, realized nothing had changed, and completely skipped the task to save time.
+Because we explicitly told Gradle what the inputs (`inputs.dir file('src/main/res')`) and outputs (`outputs.dir file('build/res')`) were, Gradle generated a cryptographic hash of those folders. On the second run, Gradle looked at the folders, realized nothing had changed, and completely skipped the task to save time.
 
-If our `build.py` script was a blunt instrument, Gradle is a scalpel. This feature, **Incremental Build**, is the core reason build systems like Gradle exist. Imagine having a project with 5,000 files; you only want to recompile the 1 file you just changed, not the other 4,999.
+This feature, **Incremental Build**, is the core reason build systems like Gradle exist.
 
 ### Chaining the rest of the Tasks
 Right now, we have one task (`compileResources`). But our build process has 7 steps. If we write a task for each step, how does Gradle know what order to run them in?
@@ -328,7 +320,7 @@ tasks.register('signApk', Exec) {
 }
 ```
 
-Once all 7 (+1 keystore generation task) tasks are registered and linked with dependsOn, you no longer have to worry about the order of operations.
+Once all 7 (+1 keystore generation task) tasks are registered and linked with `dependsOn`, you no longer have to worry about the order of operations.
 
 If you want a final, signed APK, you simply open your terminal and ask Gradle to run the very last task in the chain:
 
@@ -339,7 +331,7 @@ gradle signApk
 Gradle will look at `signApk` and say:
 > *"To sign the APK, I first need to zipalign it. To align it, I need to package it. To package it, I need convertToDex... "*
 
-It reads the chain all the way back to the beginning, checks the inputs and outputs of every single step, skips the ones that are UP-TO-DATE, and runs the ones that aren't.
+It reads the chain all the way back to the beginning, checks the `inputs` and `outputs` of every single step, skips the ones that are `UP-TO-DATE`, and runs the ones that aren't.
 
 We have successfully replaced our Python script with a much smarter, automated build system!
 
