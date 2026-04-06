@@ -1,0 +1,155 @@
+def androidHome = System.getenv("ANDROID_HOME")
+
+if (androidHome == null) {
+    throw new GradleException("ANDROID_HOME environment variable is not set!")
+}
+
+def buildTools = "${androidHome}/build-tools/34.0.0"
+def platformJar = "${androidHome}/platforms/android-34/android.jar"
+
+def ksPassword='superSecret123'
+def ksFileName='mykey.keystore'
+def ksAlias='mykey'
+
+tasks.register('compileResources', Exec) {
+
+    inputs.dir file('src/main/res')
+
+    outputs.dir file('build/res')
+
+    doFirst {
+        mkdir 'build/res'
+    }
+
+    commandLine "${buildTools}/aapt2", 'compile', '--dir', 'src/main/res', '-o', 'build/res'
+}
+
+tasks.register('linkResources', Exec) {
+    dependsOn 'compileResources'
+
+    inputs.dir file('build/res')
+    inputs.file file('src/main/AndroidManifest.xml')
+
+    outputs.dir file('build/generated')
+    outputs.file file('build/unsigned.apk')
+
+    doFirst {
+        mkdir 'build/generated'
+        args fileTree(dir: 'build/res', include: '*.flat').files
+    }
+
+    commandLine "${buildTools}/aapt2", 'link',
+                '-I', platformJar,
+                '--manifest', 'src/main/AndroidManifest.xml',
+                '--java', 'build/generated',
+                '-o', 'build/unsigned.apk'
+}
+
+tasks.register('compileJava', Exec) {
+    dependsOn 'linkResources'
+
+    inputs.dir file('src/main/java')
+    inputs.dir file('build/generated')
+
+    outputs.dir file('build/classes')
+
+    doFirst {
+        mkdir 'build/classes'
+        args fileTree(dir: 'src/main/java', include: '**/*.java').files +
+             fileTree(dir: 'build/generated', include: '**/*.java').files
+    }
+
+    commandLine 'javac', '-classpath', platformJar, '-d', 'build/classes'
+}
+
+tasks.register('convertToDex', Exec) {
+    dependsOn 'compileJava'
+
+    inputs.dir file('build/classes')
+
+    outputs.dir file('build/dex')
+
+    doFirst {
+        mkdir 'build/dex'
+        args fileTree(dir: 'build/classes', include: '**/*.class').files
+    }
+
+    commandLine "${buildTools}/d8", '--lib', platformJar, '--output', 'build/dex'
+}
+
+tasks.register('addDexToApk', Exec) {
+    dependsOn 'convertToDex'
+
+    inputs.file file('build/dex/classes.dex')
+    inputs.file file('build/unsigned.apk')
+
+    outputs.file file('build/unsigned_with_dex.apk')
+
+    // Copy the original unsigned APK to the new name, then add the dex file
+    doFirst {
+        copy {
+            from 'build/unsigned.apk'
+            into 'build'
+            rename { 'unsigned_with_dex.apk' }
+        }
+    }
+
+    commandLine 'zip', '-j', 'build/unsigned_with_dex.apk', 'build/dex/classes.dex'
+}
+
+tasks.register('zipAlign', Exec) {
+    dependsOn 'addDexToApk'
+
+    inputs.file file('build/unsigned_with_dex.apk')
+
+    outputs.file file('build/aligned.apk')
+
+    commandLine "${buildTools}/zipalign", '-p', '-f', '4',
+                'build/unsigned_with_dex.apk',
+                'build/aligned.apk'
+}
+
+tasks.register('generateKeystore', Exec) {
+    def keyalg = 'RSA'
+    def validity = '10000'
+    def dname = 'CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown'
+
+    inputs.property("ksPassword", ksPassword)
+    inputs.property("ksFileName", ksFileName)
+    inputs.property("ksAlias", ksAlias)
+    inputs.property("keyalg", keyalg)
+    inputs.property("validity", validity)
+    inputs.property("dname", dname)
+
+    outputs.file file(ksFileName)
+
+    doFirst {
+        file(ksFileName).delete()
+    }
+
+    commandLine 'keytool', '-genkeypair',
+            '-keystore', ksFileName,
+            '-alias', ksAlias,
+            '-keyalg', keyalg,
+            '-validity', validity,
+            '-storepass', ksPassword,
+            '-keypass', ksPassword,
+            '-dname', dname
+}
+
+tasks.register('signApk', Exec) {
+    dependsOn 'zipAlign', 'generateKeystore'
+
+    inputs.file file('build/aligned.apk')
+    inputs.file file(ksFileName)
+
+    outputs.file file('build/signed.apk')
+
+    commandLine "${buildTools}/apksigner", 'sign',
+                '--ks', ksFileName,
+                '--ks-key-alias', ksAlias,
+                '--ks-pass', "pass:${ksPassword}",
+                '--key-pass', "pass:${ksPassword}",
+                '--out', 'build/signed.apk',
+                'build/aligned.apk'
+}

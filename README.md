@@ -12,397 +12,352 @@
 
 ---
 
-Android Studio is a powerful tool. But when I first used it, much of what it did felt opaque, with endless Gradle syncs and auto-generated files that I barely understood.
+👉 Read Chapter 1: https://github.com/hethon/ATFS/tree/master
 
-I believe that to understand a tool, you must first understand the problem it solves. This project documents my journey learning Android development tooling. It begins by building a basic Android app using only the minimum necessary tools, without relying on an IDE or build system, and then introduces Gradle, followed by Android Studio.
+---
+## Chapter 2
 
-## Goals
-- Become comfortable with the Android tooling and development workflow.
-- Understand what tools like Android Studio and Gradle handle automatically.
-- Gain a clearer sense of how the pieces fit together.
-- Develop a sense of control over the development process.
+**Replacing the manual build process with Gradle**
 
+In [Chapter 1](https://github.com/hethon/ATFS/tree/master), we managed to build an Android app using a completely manual process. We ran each step one by one, until we finally produced a signed APK.
 
-## Chapters of this Journey
+To make things easier, we grouped all those steps into a single script: `build.py`. This was a nice improvement. Instead of remembering every command and running them in the correct order, we could just run one script and let it execute each step perfectly.
 
-This repository is structured into branches, each representing a chapter in the learning process.
+But pretty quickly, a limitation became obvious.
 
-- `chapter-1-manual-build` (📍You are here): Building an Android app using only the raw SDK command-line tools.
+The script isn’t *smart*. It just runs everything, every time. Even if I only change a single Java file, the script still runs all the build steps. This includes resource compilation, even when no XML files have been touched.
 
-- [`chapter-2-gradle-cli`](https://github.com/hethon/atfs/tree/chapter-2-gradle-cli): Introducing Gradle and the Android Gradle Plugin to automate the build, still without an IDE. `[Not published yet]`
+What if there was a build system that understands what changed, and *only* runs the necessary steps?
 
-- [`chapter-3-android-studio`](https://github.com/hethon/atfs/tree/chapter-3-android-studio): Finally opening the IDE, with the magic stripped away and a full understanding of the underlying system. `[Not published yet]`
+That’s where Gradle comes in.
+
+### What is Gradle?
+
+> Gradle is an open-source build automation tool used to manage the entire lifecycle of software development, including compiling, packaging, testing, and deployment.
+
+For our purposes, we are mainly interested in how Gradle handles compiling and packaging.
+
+What makes Gradle fundamentally different from our `build.py` script is that it is **intelligent**. It keeps track of "Inputs" and "Outputs," and decides which tasks actually need to run.
+
+For example, if I only modify `MainActivity.java`, Gradle won’t bother recompiling the UI resources, because the input files for the resource compiler haven't changed. It simply reuses the previous outputs and continues from there. This is called an **Incremental Build**.
+
+This kind of behavior might seem small right now, but it makes a massive difference as projects grow.
+
+Of course, Gradle can do much more than this, and it’s not really fair to compare it to our simple Python script. But even this one advantage is enough for us to justify switching to it. We are not adopting Gradle just because "everyone else uses it"; we're adopting it because we have now experienced the limitations of doing everything manually.
+
+### 1. Gradle Installation
+
+I used [SDKMAN!](https://sdkman.io/install) to install the latest version of Gradle (version 9.4.1 at the time of writing) on my Linux machine.
+
+To install SDKMAN, follow the instructions on their website: https://sdkman.io/install/
+
+After installing SDKMAN, installing Gradle is as simple as running this one command:
+
+> *(Note: You can drop the version number to install the latest version, but keeping it guarantees compatibility with this guide).*
+
+```bash
+sdk install gradle 9.4.1
+```
+
+Verify the installation:
+```bash
+gradle --version
+```
+
+### 2. Introducing Gradle to our project
+
+At this point, our project looks like this:
+
+- `src/` → our source code and resources
+- `build/` → all generated outputs (classes, dex, APKs)
+- `build.py` → a script that runs the entire build pipeline
+
+Our goal is simple: **Replace `build.py` with Gradle.**
+
+We are **not** changing the project structure.
+We are **not** using Android Studio.
+
+> <br>
+>
+> *You might also be wondering: Are we going to use the Android Gradle Plugin (AGP)?*
+>
+>**Not yet.** If we immediately apply the Android Gradle Plugin, all the complexity gets hidden behind a curtain, and it will feel like magic again. To truly understand Gradle, we are going to write our own custom Gradle tasks to execute the raw SDK commands (`aapt2`, `javac`, `d8`) first.
+>
+> Once we understand how Gradle task automation works, *then* we will invite AGP to the party.
+>
+> <br>
 
 <br>
 
-[⬇️ Go to the bottom](#whats-next)
+**A Note on the Language: Groovy vs. Kotlin**
+Before we write our first Gradle file, we need to choose a language. Gradle build scripts can be written in two languages: Groovy (`build.gradle`) or Kotlin DSL (`build.gradle.kts`).
 
-## Chapter 1:
+If you look at modern Android documentation, almost everything has shifted to Kotlin. However, in this guide, we are going to use Groovy.
 
-Building an Android app using only the raw SDK command-line tools.
+Why? Because before writing this guide, I took a detour to learn Gradle by migrating an old Java calculator project ([Kasio](https://github.com/hethon/Kasio)), and I used Groovy for that. I am comfortable with it right now. But more importantly: the language choice simply does not matter.
 
-**In this guide, we will manually:**
-- Install and set up the components of the Android SDK.
-- Create a directory layout.
-- Write the application code and manifest.
-- Run the correct terminal command for each compilation step until we get a signed, installable APK.
-- Install the APK to a physical device using `adb`.
+Whether you write your script in Groovy or Kotlin, Gradle builds the exact same graph in memory and executes the exact same steps. Our goal is to understand the concepts of build automation: inputs, outputs, task dependencies, and execution. Once you understand the concepts, switching the syntax later is trivial.
 
-### Prerequisites
-- JDK 17 is installed correctly, and the javac command is accessible globally.
-- A Linux-based Terminal.
+So, let's stick to Groovy and create our build file.
 
----
-
-### 1. Installation and Setup
-
-To build an app, we need the **Android SDK**. The Android SDK contains all the tools, libraries, and headers needed to compile Android code. 
-
-The Android SDK consists of a handful of components. The most important one to start with is the `cmdline-tools` package. This package contains `sdkmanager`, which we will use to install the other components (like `build-tools`, `platform-tools`, etc.).
-
-The `cmdline-tools` package is the minimal “bootstrap” package needed to:
-1. Run `sdkmanager`.
-2. Install everything else without needing the Android Studio GUI.
-
-#### Step 1: Create the folder structure
-Let's create a dedicated folder for our SDK.
-```bash
-mkdir -p ~/Android/cmdline-tools
-cd ~/Android/cmdline-tools
-```
-
-#### Step 2: Download and unzip `cmdline-tools`
-*(Note: You can check the [Android developer website](https://developer.android.com/studio#command-line-tools-only) for the latest download link).*
-```bash
-wget https://dl.google.com/android/repository/commandlinetools-linux-14742923_latest.zip
-
-unzip commandlinetools-linux-14742923_latest.zip
-
-mv cmdline-tools latest
-
-rm commandlinetools-linux-14742923_latest.zip
-```
-
-After this, you will have `~/Android/cmdline-tools/latest/bin/`. Inside this `bin/` folder are the core tools like `sdkmanager`.
-
-#### Step 3: Set environment variables
-Add this to your `~/.bashrc` (or `~/.zshrc`):
-```bash
-export ANDROID_HOME=$HOME/Android
-export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-```
-Apply it:
-```bash
-source ~/.bashrc
-```
-
-You should now be able to run `sdkmanager` from anywhere:
-```bash
-sdkmanager --list
-```
-
-#### Step 4: Install the required SDK packages
-From the list of available packages, we need three specific things to build an app:
-
-*   **`build-tools`**: Includes tools like `aapt2` (resource compiler) and `d8` (bytecode converter) used to package your app into an APK.
-*   **`platform-tools`**: Contains tools needed to communicate with physical or virtual devices (like `adb`).
-*   **`platforms`**: The actual Android framework libraries (the `android.jar`) needed to compile your app against a specific version of Android. 
-
-Run the following to install these packages (we are targeting Android API 34):
-```bash
-sdkmanager "build-tools;34.0.0" "platform-tools" "platforms;android-34"
-```
-
-Let's update our environment variables one more time to include the newly installed `platform-tools`:
-```bash
-export ANDROID_HOME=$HOME/Android
-export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
-```
-Apply it (`source ~/.bashrc`), and verify `adb` is accessible:
-```bash
-adb version
-```
-
-You might notice we only added `cmdline-tools` and `platform-tools` to PATH, but not `build-tools`. That’s intentional.
-
-The tools inside `cmdline-tools` and `platform-tools` (`sdkmanager`, `adb`) are general-purpose commands you’ll run directly from the terminal, so it makes sense to have them globally available.
-
-`build-tools`, on the other hand, is different. It contains the actual compilers and packaging tools (`aapt2`, `d8`, `apksigner`), and they live inside versioned directories, in our case, `$ANDROID_HOME/build-tools/34.0.0/`. Each Android project may require a specific version of these tools, and this project uses `34.0.0`.
-
-
-In the next steps, we’ll invoke these tools using their full paths:
-
-```
-$ANDROID_HOME/build-tools/34.0.0/aapt2
-
-# OR
-
-$ANDROID_HOME/build-tools/34.0.0/d8
-
-```
-
----
-
-### 2. Creating the Project Structure
-
-Let's create our workspace and the folders required to hold our code and the compiled outputs.
+Let's create a file named `build.gradle` in the root of our project:
 
 ```bash
-cd ~ # go back to home directory
-mkdir HelloAndroid
-cd HelloAndroid
-
-mkdir -p src/main/java/com/example/hello
-mkdir -p src/main/res/values
-mkdir -p build/classes
-mkdir -p build/dex
-mkdir -p build/res
-mkdir -p build/generated
+touch build.gradle
 ```
 
-**Why this specific structure?**
-While we are building this manually, we are mirroring the standard directory structure expected by Gradle. `src/main/java` holds our logic, `src/main/res` holds our visuals, and the `build/` directory acts as our temporary workspace where our compiled binaries will go. Keeping this standard structure will make migrating to Gradle later incredibly easy.
+In our Python script, the very first thing we did was define our environment variables and paths. We can do the exact same thing at the top of our `build.gradle` file:
 
-#### Create a String Resource
-In Android, the `res/` (resources) folder stores UI layouts, text, images, and colors. This keeps hardcoded strings out of our Java logic. 
+```groovy
+def androidHome = System.getenv("ANDROID_HOME")
 
-```bash
-touch src/main/res/values/strings.xml
+if (androidHome == null) {
+    throw new GradleException("ANDROID_HOME environment variable is not set!")
+}
+
+def buildTools = "${androidHome}/build-tools/34.0.0"
+def platformJar = "${androidHome}/platforms/android-34/android.jar"
+
+def ksPassword='superSecret123'
+def ksFileName='mykey'
+def ksAlias='mykey'
 ```
-**Content:**
-```xml
-<resources>
-    <string name="app_name">HelloAndroid</string>
-    <string name="welcome">Hey, welcome to my first app.</string>
-</resources>
+
+> <br>
+>
+> Notice the keysote related variables we defined: ksPassword, ksFileName and ksAlias. We will use them later to generate keystore without our intervention. In a real project you wound't expose your keystore related info, they must be kept secret thus you would store them in .env file or gradle.properties.
+>
+> <br>
+
+#### Writing our First Custom Task
+
+In Gradle, everything is a Task. A task represents a single atomic piece of work for a build, such as compiling classes.
+
+In our Python script, Step 1 was compiling our XML resources using aapt2:
+```python
+# The Python way
+subprocess.check_call([
+    f"{BUILD_TOOLS}/aapt2", "compile",
+    "--dir", "src/main/res",
+    "-o", "build/res"
+])
 ```
-✅ **What this does:** It defines a string called `welcome`. Later, our Java code will reference this string via `R.string.welcome`.
 
-#### Create the Activity (The app's entry point)
-```bash
-touch src/main/java/com/example/hello/MainActivity.java
-```
-**Content:**
-```java
-package com.example.hello;
+Let's translate this into a Gradle task. Gradle has a built-in task type called Exec, which is specifically designed to run command-line tools. Add this to your `build.gradle`:
+```groovy
+tasks.register('compileResources', Exec) {
+    inputs.dir file('src/main/res')
+    outputs.dir file('build/res')
 
-import android.app.Activity;
-import android.os.Bundle;
-import android.widget.TextView;
-
-public class MainActivity extends Activity {
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        
-        TextView text = new TextView(this);
-        text.setText(R.string.welcome);
-        
-        setContentView(text);
+    doFirst {
+        mkdir 'build/res'
     }
+
+    commandLine "${buildTools}/aapt2", 'compile', '--dir', 'src/main/res', '-o', 'build/res'
 }
 ```
 
-#### Create the AndroidManifest.xml
-The Android OS does not scan your Java code to find out how your app works. It reads the Manifest. 
+Let's test our new build system. Open your terminal and run the task we just created:
+```bash
+gradle compileResources
+```
+
+You should see something like this:
+```
+BUILD SUCCESSFUL in 5s
+1 actionable task: 1 executed
+```
+
+Gradle successfully ran aapt2 and generated our compiled resources. So far, it feels exactly like our Python script.
+
+But here is where the magic happens. Run the exact same command a second time:
+```bash
+gradle compileResources
+```
+
+Output:
+```
+BUILD SUCCESSFUL in 744ms
+1 actionable task: 1 up-to-date
+```
+
+**Notice the UP-TO-DATE text?**
+
+Gradle didn't run the aapt2 command. It finished in a far less amount of time, 744ms in my case.
+
+Because we explicitly told Gradle what the inputs (src/main/res) and outputs (build/res) were, Gradle generated a cryptographic hash of those folders. On the second run, Gradle looked at the folders, realized nothing had changed, and completely skipped the task to save time.
+
+If our `build.py` script was a blunt instrument, Gradle is a scalpel. This feature, **Incremental Build**, is the core reason build systems like Gradle exist. Imagine having a project with 5,000 files; you only want to recompile the 1 file you just changed, not the other 4,999.
+
+### Chaining the rest of the Tasks
+Right now, we have one task (`compileResources`). But our build process has 7 steps. If we write a task for each step, how does Gradle know what order to run them in?
+
+In our Python script, the order was guaranteed because the code executed top-to-bottom. In Gradle, tasks don't run top-to-bottom. Instead, Gradle uses a Directed Acyclic Graph (DAG). We simply tell Gradle: "Task B depends on Task A." Gradle calculates the rest.
+
+Let's translate the next few steps from our `build.py` script to see this in action. Add these to your `build.gradle`:
+
+```groovy
+tasks.register('linkResources', Exec) {
+    dependsOn 'compileResources'
+
+    inputs.dir file('build/res')
+    inputs.file file('src/main/AndroidManifest.xml')
+
+    outputs.dir file('build/generated')
+    outputs.file file('build/unsigned.apk')
+
+    doFirst {
+        mkdir 'build/generated'
+        args fileTree(dir: 'build/res', include: '*.flat').files
+    }
+
+    commandLine "${buildTools}/aapt2", 'link',
+                '-I', platformJar,
+                '--manifest', 'src/main/AndroidManifest.xml',
+                '--java', 'build/generated',
+                '-o', 'build/unsigned.apk'
+}
+
+tasks.register('compileJava', Exec) {
+    dependsOn 'linkResources'
+
+    inputs.dir file('src/main/java')
+    inputs.dir file('build/generated')
+
+    outputs.dir file('build/classes')
+
+    doFirst {
+        mkdir 'build/classes'
+        args fileTree(dir: 'src/main/java', include: '**/*.java').files +
+             fileTree(dir: 'build/generated', include: '**/*.java').files
+    }
+
+    commandLine 'javac', '-classpath', platformJar, '-d', 'build/classes'
+}
+
+tasks.register('convertToDex', Exec) {
+    dependsOn 'compileJava'
+
+    inputs.dir file('build/classes')
+
+    outputs.dir file('build/dex')
+
+    doFirst {
+        mkdir 'build/dex'
+        args fileTree(dir: 'build/classes', include: '**/*.class').files
+    }
+
+    commandLine "${buildTools}/d8", '--lib', platformJar, '--output', 'build/dex'
+}
+
+tasks.register('addDexToApk', Exec) {
+    dependsOn 'convertToDex'
+
+    inputs.file file('build/dex/classes.dex')
+    inputs.file file('build/unsigned.apk')
+
+    outputs.file file('build/unsigned_with_dex.apk')
+
+    // Copy the original unsigned APK to the new name, then add the dex file
+    doFirst {
+        copy {
+            from 'build/unsigned.apk'
+            into 'build'
+            rename { 'unsigned_with_dex.apk' }
+        }
+    }
+
+    commandLine 'zip', '-j', 'build/unsigned_with_dex.apk', 'build/dex/classes.dex'
+}
+
+tasks.register('zipAlign', Exec) {
+    dependsOn 'addDexToApk'
+
+    inputs.file file('build/unsigned_with_dex.apk')
+
+    outputs.file file('build/aligned.apk')
+
+    commandLine "${buildTools}/zipalign", '-p', '-f', '4',
+                'build/unsigned_with_dex.apk',
+                'build/aligned.apk'
+}
+
+tasks.register('generateKeystore', Exec) {
+    def keyalg = 'RSA'
+    def validity = '10000'
+    def dname = 'CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown'
+
+    inputs.property("ksPassword", ksPassword)
+    inputs.property("ksFileName", ksFileName)
+    inputs.property("ksAlias", ksAlias)
+    inputs.property("keyalg", keyalg)
+    inputs.property("validity", validity)
+    inputs.property("dname", dname)
+
+    outputs.file file(ksFileName)
+
+    doFirst {
+        file(ksFileName).delete()
+    }
+
+    commandLine 'keytool', '-genkeypair',
+            '-keystore', ksFileName,
+            '-alias', ksAlias,
+            '-keyalg', keyalg,
+            '-validity', validity,
+            '-storepass', ksPassword,
+            '-keypass', ksPassword,
+            '-dname', dname
+}
+
+tasks.register('signApk', Exec) {
+    dependsOn 'zipAlign', 'generateKeystore'
+
+    inputs.file file('build/aligned.apk')
+    inputs.file file(ksFileName)
+
+    outputs.file file('build/signed.apk')
+
+    commandLine "${buildTools}/apksigner", 'sign',
+                '--ks', ksFileName,
+                '--ks-key-alias', ksAlias,
+                '--ks-pass', "pass:${ksPassword}",
+                '--key-pass', "pass:${ksPassword}",
+                '--out', 'build/signed.apk',
+                'build/aligned.apk'
+}
+```
+
+Once all 7 (+1 keystore generation task) tasks are registered and linked with dependsOn, you no longer have to worry about the order of operations.
+
+If you want a final, signed APK, you simply open your terminal and ask Gradle to run the very last task in the chain:
 
 ```bash
-touch src/main/AndroidManifest.xml
-```
-**Content:**
-```xml
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.hello"
-    android:versionCode="1"
-    android:versionName="1.0">
-
-    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34" />
-
-    <application android:label="@string/app_name">
-        <activity android:name=".MainActivity" android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>
-```
-✅ **What this does:** It tells the OS what permissions the app needs, the name of the app, and crucially, the `MAIN` and `LAUNCHER` intent filters tell the OS: *"This Activity is the app's starting screen, put a clickable icon for it on the user's home screen."*
-
----
-
-### 3. The Build Pipeline
-
-This is where the magic is stripped away. We will run the exact terminal commands required to turn these text files into a working Android app.
-
-#### Step 1: Compile Resources (`aapt2 compile`)
-```bash
-$ANDROID_HOME/build-tools/34.0.0/aapt2 compile \
-    --dir src/main/res \
-    -o build/res
-```
-👉 **What this does:** It reads our XML files, validates them for syntax errors, and converts them into compiled binary resources (`build/res/values_strings.arsc.flat`).
-
-#### Step 2: Link Resources (`aapt2 link`)
-```bash
-$ANDROID_HOME/build-tools/34.0.0/aapt2 link \
-  -I $ANDROID_HOME/platforms/android-34/android.jar \
-  --manifest src/main/AndroidManifest.xml \
-  --java build/generated \
-  -o build/unsigned.apk \
-  build/res/*.flat
-```
-👉 **What this does:** 
-1. It packages our compiled resources and the Manifest into a brand new ZIP archive named `unsigned.apk`. (Yes, APK is just a ZIP archive with a strict internal structure enforced by Android.)
-
-2. It generates the `R.java` file inside `build/generated`. The `R.java` file is the bridge that assigns a unique integer ID to our `<string name="welcome">`, allowing our Java code to call `R.string.welcome` without crashing!
-
-> <br>
->
-> **Why did we pass `android.jar` here?**  
->
-> The `AndroidManifest.xml` uses attributes from the Android framework (like `android:label`, `android:versionCode`, etc.).
->
-> During this step, `aapt2` needs to understand these attributes in order to process the Manifest correctly.
->
-> The `android.jar` provides those framework definitions.
->
-> <br>
-
-#### Step 3: Compile the Java Code (`javac`)
-We must compile our `MainActivity.java` and the newly generated `R.java` file together. We also must include the `android.jar` in our classpath, otherwise the compiler won't know what an `Activity` or a `TextView` is.
-
-```bash
-javac \
-    -classpath $ANDROID_HOME/platforms/android-34/android.jar \
-    -d build/classes \
-    src/main/java/com/example/hello/*.java \
-    build/generated/com/example/hello/*.java
+gradle signApk
 ```
 
-This command compiles the Java codes and produces JVM bytecode `.class` files in `build/classes/com/example/hello`. In the next step, these `.class` files will be converted into Dalvik bytecode.
+Gradle will look at `signApk` and say:
+> *"To sign the APK, I first need to zipalign it. To align it, I need to package it. To package it, I need convertToDex... "*
 
-> <br>
->
-> **What is `android.jar` actually?**
->
-> `android.jar` is the **Android framework API** packaged as a Java library. It contains all the classes your app can use (like `Activity`, `TextView`, etc.), along with their method signatures and structure.
->
-> This allows tools like `javac`, `aapt2`, and `d8` to understand and validate your code against a specific Android version (in our case, API 34).
->
-> However, it does **not** contain the real implementations of these classes. It only includes **API stubs**—just enough for compilation.
->
-> The actual implementations live on the Android device itself. At runtime, your app links against the system's Android framework, not this JAR.
->
-> <br>
+It reads the chain all the way back to the beginning, checks the inputs and outputs of every single step, skips the ones that are UP-TO-DATE, and runs the ones that aren't.
 
-#### Step 4: Convert to Dalvik Bytecode (`d8`)
-Android devices do not run standard Java `.class` files. They run highly optimized `.dex` (Dalvik Executable) files.
+We have successfully replaced our Python script with a much smarter, automated build system!
 
-The --lib flag again points to `android.jar`, allowing `d8` to resolve Android API references.
-
-```bash
-$ANDROID_HOME/build-tools/34.0.0/d8 \
-    build/classes/com/example/hello/*.class \
-    --lib $ANDROID_HOME/platforms/android-34/android.jar \
-    --output build/dex
-```
-
-We will now have a `build/dex/classes.dex` file.
-
-#### Step 5: Add the Code to the APK
-In Step 2, `aapt2` created `unsigned.apk` and put our resources in it. Now, we just inject our compiled code into that same ZIP archive.
-
-```bash
-zip -j build/unsigned.apk build/dex/classes.dex
-```
-*(The `-j` flag tells zip to drop the file at the root of the archive, which is exactly where Android expects `classes.dex` to be).*
-
-#### Step 6: Zipalign
-This step rearranges the uncompressed data inside the APK to sit on 4-byte boundaries. This allows the Android OS to read the app directly from memory (mmap) without having to extract it first, saving RAM.
-
-```bash
-$ANDROID_HOME/build-tools/34.0.0/zipalign -p -f 4 build/unsigned.apk build/aligned.apk
-```
-
-#### Step 7: Sign the APK
-Android strictly requires every app to be cryptographically signed before it can be installed.
-
-First, generate a keystore (we only need to do this once):
-```bash
-keytool -genkeypair \
-  -keystore mykey.keystore \
-  -alias mykey \
-  -keyalg RSA \
-  -validity 10000
-```
-
-Next, sign the aligned APK:
-```bash
-$ANDROID_HOME/build-tools/34.0.0/apksigner sign \
-    --ks mykey.keystore \
-    --ks-key-alias mykey \
-    --out build/signed.apk \
-    build/aligned.apk
-```
-
-**Yay! 🎉** We have manually assembled `build/signed.apk`. It is a fully valid Android application. Now we are ready to install it.
-
----
-
-### 4. Install and Run
-
-Let's put the app on a real phone using `adb` (Android Debug Bridge).
-
-1. Enable **USB Debugging** in the Developer Settings of your phone.
-2. Connect your phone to your PC. *(If you are using WSL, use `usbipd-win` to forward the USB connection to Linux).*
-3. Verify the connection:
-```bash
-adb devices
-```
-*(If prompted on your phone, authorize the connection).*
-
-4. Install the signed APK!
-```bash
-adb install -r build/signed.apk
-```
-
-Open your phone, go to your app drawer, and look for **HelloAndroid**. We just built and deployed an app entirely from the command line.
-
-### 5. Automating the Process (`build.py`)
-
-Typing these 7 terminal commands every time you change a single line of Java is exhausting. To make this process easily repeatable, I aggregated all of these steps into a Python script called `build.py`.
-
-This script is roughly what `Gradle` and the `Android Gradle Plugin (AGP)` fundamentally do. They run `aapt2`, `javac`, and `d8` in the correct order, and output a signed APK.
-
-Make sure you have `python3` installed and just give the script execute permissions and run it. It will do the 7 steps we did [above](#3-the-build-pipeline) and outputs `build/signed.apk`.
-
-```bash
-chmod +x build.py
-./build.py
-```
-*(Note: It will prompt you for your keystore password during the signing step).*
-
----
 
 ### What's Next?
 
-After successfully building this app manually, the logical next step is to invite **Gradle** and the **Android Gradle Plugin (AGP)** to the party. However, we are still going to keep **Android Studio** out of the picture for now. This will help us understand exactly how Gradle automates the manual steps we just learned.
+Our `build.py` script was dumb. Our custom `build.gradle` is much better because it is incremental at the task level. If we change a `.java` file, Gradle is smart enough to skip `compileResources` and go straight to `compileJava`.
 
-> <br>
->
-> **Side Note**
->
-> At this point you can take a detour and try to learn Gradle on a pure Java project first. This helps you understand Gradle's core concepts without the added noise of the Android SDK. 
->
-> That is exactly what I did. I picked up an old Java Swing Calculator app I made a while ago and migrated it to Gradle. It started a massive chain of rabbit holes and I ended up learning a lot of other cool things. You can check that out here: https://github.com/hethon/Kasio.
->
-> <br>
+But there is a catch: **It is not incremental at the file level.**
 
+If you have a project with `1,000` Java files and you change one line in one file, our `compileJava` task will blindly pass all `1,000` files to `javac` and recompile everything. On a massive enterprise app, this could take several minutes.
 
-To keep this branch as a pure, Gradle-free reference, the Gradle implementation will be documented in a separate branch here: https://github.com/hethon/atfs/tree/chapter-2-gradle-cli. 
+Could we fix this? Technically, yes. We could modify `build.gradle`, write a bunch of complex Groovy code using Gradle's internal file-tracking APIs to figure out exactly which file changed, and pass only that single file to the compiler.
 
-<br>
+But doing that for Java compilation, resource linking, and Dex conversion would require thousands of lines of code. Our simple build script would become massive, buggy, and impossible to maintain.
 
-[⬆️ Go to Up](#atfs)
+**What if we didn't have to write it ourselves?**
+
+What if we could include something, a plugin, perhaps, that automatically injects tasks into our project? Tasks that are already perfectly configured, maintained by engineers at Google, and support true, lightning-fast, file-level incremental builds?
+
+In the next chapter, we will replace our custom tasks and introduce the Android Gradle Plugin (AGP).
