@@ -24,7 +24,7 @@ DEX_DIR = BUILD_DIR / "dex"
 APK_NAME = "HelloAndroid.apk"
 KEYSTORE = PROJECT_ROOT / "mykey.keystore"
 KEY_ALIAS = "mykey"
-MANIFEST = SRC_DIR / "AndroidManifest.xml"
+MANIFEST = SRC_DIR / "main" / "AndroidManifest.xml"
 # ----------------------------------------
 
 def run(cmd, **kwargs):
