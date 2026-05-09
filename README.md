@@ -12,344 +12,315 @@
 
 ---
 
-👉 Read Chapter 1: https://github.com/hethon/ATFS/tree/master
+👉 Read Chapter 1: https://github.com/hethon/ATFS/tree/master \
+👉 Read Chapter 2: https://github.com/hethon/ATFS/tree/chapter-2-gradle-cli
 
 ---
-## Chapter 2
+## Chapter 3
 
-**Replacing the manual build process with Gradle**
+**Replacing the custom Gradle script with the Android Gradle Plugin (AGP)**
 
-In [Chapter 1](https://github.com/hethon/ATFS/tree/master), we managed to build an Android app using a completely manual process. We ran each step one by one, until we finally produced a signed APK.
+In [Chapter 2](https://github.com/hethon/ATFS/tree/chapter-2-gradle-cli), we replaced our basic `build.py` script with `build.gradle`. We gained the power of *task-level* incremental builds, meaning Gradle was smart enough to skip entire build tasks (e.g., `compileResources`, `linkResources`, `compileJava`) if the inputs and outputs of that task hadn't changed.
 
-To make things easier, we grouped all those steps into a single script: `build.py`. This was a nice improvement. Instead of remembering every command and running them in the correct order, we could just run one script and let it execute each step perfectly.
+We ended `Chapter 2` by highlighting a limitation in our `build.gradle`: our custom Gradle tasks were not *file-level* incremental. If one Java file out of a thousand changed, our `compileJava` task still blindly recompiled all 1,000 files.
 
-But pretty quickly, a limitation became obvious.
-
-The script isn’t *smart*. It just runs everything, every time. Even if I only change a single Java file, the script still runs all the build steps. This includes resource compilation, even when no XML files have been touched.
-
-What if there was a build system that understands what changed, and *only* runs the necessary steps?
-
-That’s where Gradle comes in.
-
-### What is Gradle?
-
-> Gradle is an open-source build automation tool used to manage the entire lifecycle of software development, including compiling, packaging, testing, and deployment.
-
-For our purposes, we are mainly interested in how Gradle handles compiling and packaging.
-
-What makes Gradle fundamentally different from our `build.py` script is that it is **intelligent**. It keeps track of "Inputs" and "Outputs," and decides which tasks actually need to run.
-
-For example, if I only modify `MainActivity.java`, Gradle won’t bother recompiling the UI resources, because the input files for the resource compiler haven't changed. It simply reuses the previous outputs and continues from there. This is called an **Incremental Build**.
-
-This kind of behavior might seem small right now, but it makes a massive difference as projects grow.
-
-Of course, Gradle can do much more than this, and it’s not really fair to compare it to our simple Python script. But even this one advantage is enough for us to justify switching to it. We are not adopting Gradle just because "everyone else uses it"; we're adopting it because we have now experienced the limitations of doing everything manually.
-
-### 1. Gradle Installation
-
-I used [SDKMAN!](https://sdkman.io/install) to install the latest version of Gradle (version 9.4.1 at the time of writing) on my Linux machine.
-
-To install SDKMAN, follow the instructions on their website: https://sdkman.io/install/
-
-After installing SDKMAN, installing Gradle is as simple as running this one command:
-
-> *(Note: You can drop the version number to install the latest version, but keeping it guarantees compatibility with this guide).*
-
-```bash
-sdk install gradle 9.4.1
-```
-
-Verify the installation:
-```bash
-gradle --version
-```
-
-### 2. Introducing Gradle to our project
-
-At this point, our project looks like this:
-
-- `src/` → our source code and resources
-- `build/` → all generated outputs (classes, dex, APKs)
-- `build.py` → a script that runs the entire build pipeline
-
-Our goal is simple: **Replace `build.py` with Gradle build script.**
-
-
-**A Note on the Language: Groovy vs. Kotlin**
-
-Before we write our first Gradle file, we need to choose a language. Gradle build scripts can be written in two languages: Groovy (`build.gradle`) or Kotlin DSL (`build.gradle.kts`).
-
-In this guide, we are going to use Groovy.
-
-Whether you write your script in Groovy or Kotlin, Gradle builds the exact same graph in memory and executes the exact same steps. Our goal is to understand the concepts of build automation: inputs, outputs, task dependencies, and execution. Once you understand the concepts, switching the syntax later is trivial.
-
-So, let's stick to Groovy and create our build file.
-
-Let's create a file named `build.gradle` in the root of our project:
-
-```bash
-touch build.gradle
-```
-
-In our Python script, the very first thing we did was define our environment variables and paths. We can do the exact same thing at the top of our `build.gradle` file:
-
-```groovy
-// Read the ANDROID_HOME environment variable from your system
-def androidHome = System.getenv("ANDROID_HOME")
-
-if (androidHome == null) {
-    throw new GradleException("ANDROID_HOME environment variable is not set!")
-}
-
-// Define the paths we need for our build tools
-def buildTools = "${androidHome}/build-tools/34.0.0"
-def platformJar = "${androidHome}/platforms/android-34/android.jar"
-
-// Keystore configuration
-def ksPassword = 'superSecret123'
-def ksFileName = 'mykey.keystore'
-def ksAlias = 'mykey'
-```
+Let's add one more major limitation of our custom script to make the case for introducing AGP even stronger: **Environment Dependency**.
+Our custom script only works if the machine running it has the exact versions of `build-tools` and `platforms` pre-installed in the exact expected directories. If another developer clones the repository, the build will immediately crash unless they replicate our precise SDK environment.
 
 > <br>
 >
-> ⚠️ **A note on Security:**
+> These limitations are our immediate justification for adopting AGP. In reality, AGP handles a massive amount of Android-specific complexity that our manual script hasn't even encountered yet. For example:
 >
-> You'll notice we defined our keystore password and alias directly in the script. While this is convenient for a learning project, **never do this in a professional or production environment.**
->
-> Exposing your signing credentials in plain text is a security risk. In a real-world project, you would store these sensitive values in a `gradle.properties` file or an environment variable, and then instruct Gradle to read them from there. This allows you to exclude the secrets file from your Git repository (using `.gitignore`), keeping your passwords safe while still allowing the build system to access them.
->
-> For our journey, hardcoding them keeps the focus on the **build process** rather than the security setup, but always keep this "Production-Ready" approach in the back of your mind!
+> - **Dependency Management:** If we wanted to add a third-party Android library (like `Retrofit` or `Material Design`) to our manual script, we would have to manually extract its `.aar` file, merge its resources with ours, and add its classes to our classpath. AGP handles this seamlessly.
+> - **Manifest Merging:** Automatically combining our `AndroidManifest.xml` with the manifests of any libraries we use.
+> - **Build Variants:** Effortlessly creating `debug` and `release` versions of our app, or "flavors" (like a Free vs. Paid version) from the exact same codebase.
+> - **Code Shrinking:** Running tools like `R8` to remove unused code and make the final APK smaller.
 >
 > <br>
 
-#### Writing our First Custom Task
+### What is a Gradle Plugin?
 
-In Gradle, everything is a Task. A task represents a single atomic piece of work for a build, such as compiling classes.
+Before diving into AGP, let's try to understand the general concept of Plugins in Gradle.
 
-In our Python script, Step 1 was compiling our XML resources using `aapt2`:
-```python
-# The Python way
-subprocess.check_call([
-    f"{BUILD_TOOLS}/aapt2", "compile",
-    "--dir", "src/main/res",
-    "-o", "build/res"
-])
+At its core, Gradle is an agnostic, general-purpose build automation engine. Out of the box, it does not know how to compile Java, nor does it know what an Android application is. Because of this, Gradle can be used as a build tool for a number of programming languages, even C++ or Python.
+
+To make Gradle do actual work, we have to write our own custom tasks just like we did in `Chapter 2`, or install a **Plugin** for our particular language or workflow.
+
+Gradle plugins exist to extend Gradle's capabilities by injecting reusable build logic. When applied to a project, a plugin automatically defines tasks, and establishes new behaviors so developers do not have to write build scripts from scratch. *(You can read more about Gradle plugins in the [official documentation](https://docs.gradle.org/current/userguide/plugins.html)).*
+
+There are thousands of plugins in the Gradle ecosystem. Most of them can be found on the official [Gradle Plugin Portal](https://plugins.gradle.org/).
+
+However, massive companies often host their own plugin repositories. Google hosts their official Android packages, including AGP, in their own [Google Maven Repository](https://maven.google.com/). We will need to tell Gradle exactly where to look to find it.
+
+### Setup AGP
+
+Create a new file named `settings.gradle` in the project root:
+
+```bash
+touch settings.gradle
 ```
 
-Let's translate this into a Gradle task. Gradle has a built-in task type called Exec, which is specifically designed to run command-line tools. Add this to your `build.gradle`:
+**Content:**
 ```groovy
-tasks.register('compileResources', Exec) {
-    inputs.dir file('src/main/res')
-    outputs.dir file('build/res')
-
-    doFirst {
-        mkdir 'build/res'
+pluginManagement {
+    repositories {
+        google()
+        gradlePluginPortal()
     }
-
-    commandLine "${buildTools}/aapt2", 'compile', '--dir', 'src/main/res', '-o', 'build/res'
 }
+
+rootProject.name = 'HelloAndroid'
 ```
 
-Let's test our new build system. Open your terminal and run the task we just created:
-```bash
-gradle compileResources
-```
+Before Gradle reads `build.gradle`, it first reads `settings.gradle` to initialize the build environment.
 
-You should see something like this:
-```
-BUILD SUCCESSFUL in 5s
-1 actionable task: 1 executed
-```
+The `pluginManagement` block tells Gradle where plugins and their dependencies can be downloaded from.
 
-Gradle successfully ran `aapt2` and generated our compiled resources. So far, it feels exactly like our Python script. But here is where we see the difference. Run the exact same command a second time:
-```bash
-gradle compileResources
-```
+- `google()` points to Google's Maven repository, where AGP is hosted.
+- `gradlePluginPortal()` points to the Gradle Plugin Portal.
 
-Output:
-```
-BUILD SUCCESSFUL in 744ms
-1 actionable task: 1 up-to-date
-```
+> `google()` is a built-in shortcut for `https://maven.google.com/`, and `gradlePluginPortal()` is the shortcut for `https://plugins.gradle.org/`.
 
-**Notice the UP-TO-DATE text?**
+**Why do we need to include both repositories if AGP is hosted by Google?**
+The Android Gradle Plugin does not operate in isolation; it depends on other libraries and foundational Gradle plugins to function. Those dependencies often have their own dependencies, creating a deep chain. Some of these dependencies come from `gradlePluginPortal()` that's why we need to include both `google()` and `gradlePluginPortal()`.
 
-Gradle didn't run the `aapt2` command. It finished in a far less amount of time, 744ms in my case.
+Next, delete everything inside `build.gradle`.
+*(Satisfying, isn't it?)*
 
-Because we explicitly told Gradle what the inputs (`inputs.dir file('src/main/res')`) and outputs (`outputs.dir file('build/res')`) were, Gradle generated a cryptographic hash of those folders. On the second run, Gradle looked at the folders, realized nothing had changed, and completely skipped the task to save time.
-
-This feature, **Incremental Build**, is the core reason build systems like Gradle exist.
-
-### Chaining the rest of the Tasks
-Right now, we have one task (`compileResources`). But our build process has 7 steps. If we write a task for each step, how does Gradle know what order to run them in?
-
-In our Python script, the order was guaranteed because the code executed top-to-bottom. In Gradle, tasks don't run top-to-bottom. Instead, Gradle uses a Directed Acyclic Graph (DAG). We simply tell Gradle: "Task B depends on Task A." Gradle calculates the rest.
-
-Let's translate the next few steps from our `build.py` script to see this in action. Add these to your `build.gradle`:
+Open your newly emptied `build.gradle` file and add the `plugins` block to apply AGP to our project:
 
 ```groovy
-tasks.register('linkResources', Exec) {
-    dependsOn 'compileResources'
+plugins {
+    id 'com.android.application' version '9.1.1'
+}
+```
+*(Note: I used version 9.1.1 here, which is the latest stable release at the time of writing.).*
 
-    inputs.dir file('build/res')
-    inputs.file file('src/main/AndroidManifest.xml')
+When you apply the Android Gradle Plugin, it injects a custom configuration block called `android {}` into Gradle. This is where we define the rules for our app.
 
-    outputs.dir file('build/generated')
-    outputs.file file('build/unsigned.apk')
+Add this configuration below the `plugins` block:
 
-    doFirst {
-        mkdir 'build/generated'
-        args fileTree(dir: 'build/res', include: '*.flat').files
+```groovy
+android {
+    namespace 'com.example.hello'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.example.hello'
+        minSdk 23
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
     }
-
-    commandLine "${buildTools}/aapt2", 'link',
-                '-I', platformJar,
-                '--manifest', 'src/main/AndroidManifest.xml',
-                '--java', 'build/generated',
-                '-o', 'build/unsigned.apk'
-}
-
-tasks.register('compileJava', Exec) {
-    dependsOn 'linkResources'
-
-    inputs.dir file('src/main/java')
-    inputs.dir file('build/generated')
-
-    outputs.dir file('build/classes')
-
-    doFirst {
-        mkdir 'build/classes'
-        args fileTree(dir: 'src/main/java', include: '**/*.java').files +
-             fileTree(dir: 'build/generated', include: '**/*.java').files
-    }
-
-    commandLine 'javac', '-classpath', platformJar, '-d', 'build/classes'
-}
-
-tasks.register('convertToDex', Exec) {
-    dependsOn 'compileJava'
-
-    inputs.dir file('build/classes')
-
-    outputs.dir file('build/dex')
-
-    doFirst {
-        mkdir 'build/dex'
-        args fileTree(dir: 'build/classes', include: '**/*.class').files
-    }
-
-    commandLine "${buildTools}/d8", '--lib', platformJar, '--output', 'build/dex'
-}
-
-tasks.register('addDexToApk', Exec) {
-    dependsOn 'convertToDex'
-
-    inputs.file file('build/dex/classes.dex')
-    inputs.file file('build/unsigned.apk')
-
-    outputs.file file('build/unsigned_with_dex.apk')
-
-    // Copy the original unsigned APK to the new name, then add the dex file
-    doFirst {
-        copy {
-            from 'build/unsigned.apk'
-            into 'build'
-            rename { 'unsigned_with_dex.apk' }
-        }
-    }
-
-    commandLine 'zip', '-j', 'build/unsigned_with_dex.apk', 'build/dex/classes.dex'
-}
-
-tasks.register('zipAlign', Exec) {
-    dependsOn 'addDexToApk'
-
-    inputs.file file('build/unsigned_with_dex.apk')
-
-    outputs.file file('build/aligned.apk')
-
-    commandLine "${buildTools}/zipalign", '-p', '-f', '4',
-                'build/unsigned_with_dex.apk',
-                'build/aligned.apk'
-}
-
-tasks.register('generateKeystore', Exec) {
-    def keyalg = 'RSA'
-    def validity = '10000'
-    def dname = 'CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown'
-
-    inputs.property("ksPassword", ksPassword)
-    inputs.property("ksFileName", ksFileName)
-    inputs.property("ksAlias", ksAlias)
-    inputs.property("keyalg", keyalg)
-    inputs.property("validity", validity)
-    inputs.property("dname", dname)
-
-    outputs.file file(ksFileName)
-
-    doFirst {
-        file(ksFileName).delete()
-    }
-
-    commandLine 'keytool', '-genkeypair',
-            '-keystore', ksFileName,
-            '-alias', ksAlias,
-            '-keyalg', keyalg,
-            '-validity', validity,
-            '-storepass', ksPassword,
-            '-keypass', ksPassword,
-            '-dname', dname
-}
-
-tasks.register('signApk', Exec) {
-    dependsOn 'zipAlign', 'generateKeystore'
-
-    inputs.file file('build/aligned.apk')
-    inputs.file file(ksFileName)
-
-    outputs.file file('build/signed.apk')
-
-    commandLine "${buildTools}/apksigner", 'sign',
-                '--ks', ksFileName,
-                '--ks-key-alias', ksAlias,
-                '--ks-pass', "pass:${ksPassword}",
-                '--key-pass', "pass:${ksPassword}",
-                '--out', 'build/signed.apk',
-                'build/aligned.apk'
 }
 ```
 
-Once all 7 (+1 keystore generation task) tasks are registered and linked with `dependsOn`, you no longer have to worry about the order of operations.
+**Understanding the Android Configuration**:
 
-If you want a final, signed APK, you simply open your terminal and ask Gradle to run the very last task in the chain:
+- **`applicationId`**: A string that uniquely identifies your app on the device and in the Google Play Store. During the build, AGP injects this value as `package="..."` into the final, compiled `AndroidManifest.xml` inside the APK. The Android OS uses this to install the app.
+    > The `applicationId` should **never** be changed after an app is published. If it is changed, the Google Play Store will treat any subsequent upload as a completely new, separate app.
+
+- **`namespace`**: This tells AGP the base Java package name to use when generating the `R.java` and `BuildConfig.java` classes.
+
+    - The `namespace` should always match our project's actual Java package structure (in our case, `com.example.hello`) so our imports don't break. If `applicationId` is omitted, AGP will default to using the `namespace` as the Application ID, but it is best practice to declare both explicitly.
+
+    > <br>
+    >
+    > **The History of `namespace` vs `applicationId`**
+    >
+    > This separation didn't always exist. In older Android projects, you only had the `package="com...""` attribute in the `AndroidManifest.xml`. It was forced to do two completely different jobs at the same time:
+    > 1. Act as the unique Application ID for the Google Play Store.
+    > 2. Tell the build tools which Java package to use when generating the `R.java` file.
+    >
+    > This caused a major problem. If a developer wanted to build a "Free" version and a "Pro" version of their app, they had to change the `package` attribute in the Manifest so the Play Store would accept it as a separate app. But doing so *also* changed where `R.java` was generated, which instantly broke all the Java code in the project!
+    >
+    > Google eventually solved this by splitting the responsibilities. Now, `namespace` handles the internal code structure, and `applicationId` handles the external OS identity. You can change your `applicationId` to create a "Pro" version without touching a single line of your Java code.
+    >
+    > <br>
+
+    <br>
+
+*   **`compileSdk`**: This tells AGP which Android API version to compile against. This entirely replaces the need for us to hardcode the path to `android-34/android.jar` in our custom tasks! AGP will locate the correct framework JAR automatically.
+*   **`minSdk`**: Defines the oldest Android version your app supports. AGP injects this as `minSdkVersion="..."` into the final Manifest.
+*   **`targetSdk`**: Defines the API level the app was designed and tested against. AGP injects this as `targetSdkVersion="..."` into the final Manifest.
+*   **`versionCode` / `versionName`**: Internal and public version numbers. AGP injects these as attributes into the root `<manifest>` tag.
+
+
+Notice how **declarative** this configuration is. We are no longer instructing Gradle how to perform each build step. Instead, we are defining what the application should look like, its identity, SDK targets, ..., and letting AGP take responsibility for translating that model into the actual build process.
+
+### Cleaning up the Manifest
+
+Because AGP now manages these properties and dynamically injects them into the APK during the build process, we must delete them from our source code.
+
+In fact, if you try to build the app right now without deleting the `<uses-sdk>` block from your `src/main/AndroidManifest.xml`, AGP 9.0+ will immediately crash the build and throw this exact error:
+
+```text
+> Manifest merger failed : The <uses-sdk> tag was detected in your main AndroidManifest.xml file... it is no longer allowed for controlling SDK versions (e.g., targetSdkVersion, minSdkVersion). Starting with Android Gradle Plugin 9.0.0, these attributes have been deprecated within the manifest.
+
+  To fix: Remove <uses-sdk> from your AndroidManifest.xml.
+```
+
+Google has strictly enforced the rule that `build.gradle` is the **Single Source of Truth** for SDK versions and app identity.
+
+Open your `AndroidManifest.xml` and delete the `package`, `versionCode`, `versionName`, and the entire `<uses-sdk>` block.
+
+The cleaned-up file should look exactly like this:
+
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application android:label="@string/app_name">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
+```
+
+### Listing the new tasks
+
+Let's try to see the list of all the tasks available to our project. We should able to see new tasks that are added by AGP.
 
 ```bash
-gradle signApk
+gradle tasks --all --info
 ```
 
-Gradle will look at `signApk` and say:
-> *"To sign the APK, I first need to zipalign it. To align it, I need to package it. To package it, I need convertToDex... "*
+> `--all` shows all tasks, including those not normally displayed.\
+> `--info` enables more detailed logging, so we can see additional information about what Gradle is doing under the hood.
 
-It reads the chain all the way back to the beginning, checks the `inputs` and `outputs` of every single step, skips the ones that are `UP-TO-DATE`, and runs the ones that aren't.
+Before Gradle can list the tasks, it has to read our `build.gradle` file. When it sees `id 'com.android.application'`, it enters the **plugin resolution phase**.
 
-We have successfully replaced our Python script with a much smarter, automated build system!
+Because this is the first time we are running AGP on this machine, you will see a massive list of files being downloaded, which may take a few minutes.
 
+We will investigate what got downloaded here in a separate section.
 
-### What's Next?
+### Running an AGP task
 
-Our `build.py` script was dumb. Our custom `build.gradle` is much better because it is incremental at the task level. If we change a `.java` file, Gradle is smart enough to skip `compileResources` and go straight to `compileJava`.
+In the previous step, after the `gradle tasks --all --info` command finished, your terminal printed out a long list of new tasks injected by AGP. Among these tasks is `assembleDebug`. This task is used to build a debug variant apk.
 
-But there is a catch: **It is not incremental at the file level.**
+When a task executes, Gradle may need to resolve one or more *dependency configurations* associated with that task.
 
-If you have a project with `1,000` Java files and you change one line in one file, our `compileJava` task will blindly pass all `1,000` files to `javac` and recompile everything. On a massive enterprise app, this could take several minutes.
+> <br>
+>
+> **What is a "Dependency Configuration" in Gradle?**
+>
+> In Gradle, a Dependency Configuration (or Configuration in short) is simply a named set of dependencies grouped together for a specific purpose. For example, the `compileClasspath` configuration holds all the libraries needed to compile your code, while the `runtimeClasspath` holds the libraries needed to actually run it.
+>
+> When a task like `assembleDebug` runs, Gradle must "resolve" these configurations, meaning it searches your local cache or the internet to find every exact file required before it allows the task to start.
+>
+> <br>
 
-Could we fix this? Technically, yes. We could modify `build.gradle`, write a bunch of complex Groovy code using Gradle's internal file-tracking APIs to figure out exactly which file changed, and pass only that single file to the compiler.
+<br>
 
-But doing that for Java compilation, resource linking, and Dex conversion would require thousands of lines of code. Our simple build script would become massive, buggy, and impossible to maintain.
+Let's run the build task and keep the `--info` flag on so we can watch AGP resolve its configurations:
 
-**What if we didn't have to write it ourselves?**
+```bash
+gradle assembleDebug --info
+```
 
-What if we could include something, a plugin, perhaps, that automatically injects tasks into our project? Tasks that are already perfectly configured, maintained by engineers at Google, and support true, lightning-fast, file-level incremental builds?
+The configuration resolution won't start right away instead you will see these lines in the logs:
 
-In the next chapter, we will replace our custom tasks and introduce the Android Gradle Plugin (AGP).
+```text
+Preparing "Install Android SDK Build-Tools 36 v.36.0.0".
+"Install Android SDK Build-Tools 36 v.36.0.0" ready.
+Installing Android SDK Build-Tools 36 in /home/user/Android/build-tools/36.0.0
+"Install Android SDK Build-Tools 36 v.36.0.0" complete.
+"Install Android SDK Build-Tools 36 v.36.0.0" finished.
+```
+
+The logs are showing that `build-tools` version `36.0.0` is being downloaded directly into our SDK directory.
+
+Starting from [AGP 3.0.0](https://developer.android.com/build/releases/agp-3-0-0-release-notes#behavior_changes), every version of AGP requires a specific minimum version of `build-tools`. For AGP 9.1.1, that minimum required version is `36.0.0`, which is different from the version we installed in `Chapter 1`, `34.0.0`. Because the required version is missing from our machine, AGP downloads it and stores it in `$ANDROID_HOME/build-tools/36.0.0`.
+
+This behavior highlights another massive advantage of AGP: **It auto-downloads missing SDK components.**
+
+If we hadn't manually installed the `platforms;android-34` libraries, AGP would auto-download them. If we hadn't installed `platform-tools`, it would auto-download it.
+
+This makes replicating build environments easy. A new contributor can clone your repository, run `gradle assembleDebug`, and AGP will guarantee they have the exact right SDK components installed to build the app.
+
+> <br>
+>
+> Looking back, I realized we could have just installed `build-tools;36.0.0` manually in `Chapter 1` instead of `34.0.0`.
+>
+> I originally installed `34.0.0` because I mistakenly thought the `build-tools` version had to match the `platforms` API version. I installed `platforms;android-34` because I was targeting Android 14, and I assumed the build tools needed to be version 34 as well.
+>
+> In reality, they are completely independent. `platforms` dictates the Android APIs your code can access, while `build-tools` dictates the compilers doing the work. You can (and generally should) use the latest stable version of `build-tools` to compile apps even if you are targeting older platforms.
+>
+> But honestly, this mistake was for the better! If I had installed `36.0.0` from the start, AGP wouldn't have needed to intervene, and we would have completely missed the opportunity to see AGP's powerful auto-provisioning feature in action.
+>
+> <br>
+
+<br>
+
+After the `build-tools;36.0.0` download finishes, AGP attempts to execute the task graph for `assembleDebug`.
+
+However, the build stops as soon as Gradle reaches the first task that requires dependency resolution:
+
+```text
+> Task :processDebugNavigationResources FAILED
+Build cca63e89-cf63-44d1-9655-1eeed3c93b20 is closed
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':processDebugNavigationResources'.
+> Could not resolve all files for configuration ':debugRuntimeClasspath'.
+   > Cannot resolve external dependency org.jetbrains.kotlin:kotlin-stdlib:2.2.10 because no repositories are defined.
+     Required by:
+         root project 'HelloAndroid'
+```
+
+The specific task that fails is incidental. The important detail is that this is the moment Gradle attempts to resolve a dependency configuration (`debugRuntimeClasspath`). Since no repositories have been declared, Gradle has no location from which it can download the required artifacts, so the build fails.
+
+Earlier, we defined `pluginManagement { repositories { ... } }`. However, that block only tells Gradle where to find dependencies during *plugin resolution*. We haven’t yet told Gradle where to find dependencies during *configuration resolution*.
+
+To fix this issue, we should open `settings.gradle` and add the `dependencyResolutionManagement` block below our `pluginManagement` block:
+
+```groovy
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+```
+
+> `mavenCentral()` is a built-in shortcut for `https://repo.maven.apache.org/maven2/`
+
+*(Note: The `FAIL_ON_PROJECT_REPOS` setting is a modern best practice. It forces all repositories to be declared centrally in `settings.gradle` rather than scattered across individual `build.gradle` files, preventing messy configurations in multi-module projects).*
+
+Let's run the build command one more time:
+
+```bash
+gradle assembleDebug --info
+```
+
+Now that we have defined `dependencyResolutionManagement`, Gradle knows where to look for external dependencies. You will likely see another round of downloads, which may take a few minutes as AGP resolves and fetches the required artifacts.
+
+Once this completes, the actual build process begins, and shortly after, the build should finish successfully.
+
+Because we named our project in `settings.gradle`, AGP intelligently names the output file for us. You can find it here:
+
+```bash
+ls build/outputs/apk/debug/HelloAndroid-debug.apk
+```
+
+At this point, we could use `adb` to install it on our connected device, exactly like we did with our manually built APKs in the previous chapters:
+
+```bash
+adb install build/outputs/apk/debug/HelloAndroid-debug.apk
+```
+
+However, AGP also provides an installation task:
+
+```bash
+gradle installDebug
+```
+
+This task will verify the APK exists (builds it if necessary), connect to your phone via ADB, and install the app automatically.
+
