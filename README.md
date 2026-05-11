@@ -278,6 +278,18 @@ The specific task that fails is incidental. The important detail is that this is
 
 Earlier, we defined `pluginManagement { repositories { ... } }`. However, that block only tells Gradle where to find dependencies during *plugin resolution*. We haven’t yet told Gradle where to find dependencies during *configuration resolution*.
 
+> <br>
+>
+> One subtle but important detail: **configurations are resolved lazily.**
+>
+> AGP creates a whole bunch of configurations that are waiting to be resolved, such as `debugRuntimeClasspath`, `debugCompileClasspath`, `releaseRuntimeClasspath`, `releaseCompileClasspath`, ..., but Gradle does not resolve them all up front.
+>
+> A configuration is only resolved when some task actually needs it. That is why we didn’t see this error until we ran `assembleDebug`.
+>
+> If we later run `assembleRelease`, don’t be surprised if Gradle kicks off another round of downloads while resolving configurations associated with the task such as `releaseCompileClasspath` and `releaseRuntimeClasspath`.
+>
+> <br>
+
 To fix this issue, we should open `settings.gradle` and add the `dependencyResolutionManagement` block below our `pluginManagement` block:
 
 ```groovy
