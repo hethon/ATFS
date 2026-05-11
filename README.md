@@ -336,3 +336,199 @@ gradle installDebug
 
 This task will verify the APK exists (builds it if necessary), connect to your phone via ADB, and install the app automatically.
 
+### Exploring the Gradle cache
+
+So far in this chapter, we’ve watched Gradle download a lot of files.
+
+At first glance, this can feel a little mysterious. What exactly was downloaded? Where did it go? And how do those files relate to the tools we used manually in the previous chapters?
+
+Let’s pop open the Gradle cache and take a look at some of the familiar tools.
+
+The downloaded files are permanently stored in the global Gradle cache at `~/.gradle/caches/modules-2/files-2.1`. Because they are cached globally, any subsequent builds, even for completely different Android projects on your machine, will reuse these files and start instantly.
+
+Let's navigate into that directory to see exactly what Gradle downloaded:
+
+```bash
+cd ~/.gradle/caches/modules-2/files-2.1
+```
+You’ll see a list of folders similar to this:
+```text
+com.android.application
+com.android.databinding
+com.android.tools
+com.android.tools.analytics-library
+com.android.tools.build
+com.android.tools.build.jetifier
+com.android.tools.ddms
+com.android.tools.layoutlib
+...
+```
+Each folder corresponds to a Maven groupId.
+
+Inside the cache, Gradle stores artifacts using this directory structure:
+```text
+groupId / artifactId / version / SHA-1 checksum / files
+```
+
+For example, the main JAR for the Android Gradle Plugin itself lives here:
+```bash
+ls com.android.tools.build/gradle/*/*/gradle-9.1.1.jar
+```
+By exploring this cache, we can see that build tools aren't magic, they are just massive collections of pre-compiled libraries working together.
+
+Let's explore some of the artifacts in the cache that replace the tools we manually invoked in previous chapters:
+
+#### **`com.android.tools.build:builder`**:
+
+The artifact `com.android.tools.build:builder` bundles the classes of both `D8` and `R8`.
+
+We know **D8** from `Chapter 1`. It is the tool we used to convert our Java `.class` files into Android `.dex` files. **R8** is essentially a superset tool that handles `D8 (Dexing)` + `Shrinking` + `Optimization` + `Obfuscation`.
+
+[![compile_with_r8](images/compile_with_r8.png)](https://developer.android.com/build/releases/agp-3-4-0-release-notes#behavior-changes)
+
+
+To prove that these tools are bundled inside this artifact, we can invoke them directly from the JAR itself:
+
+```bash
+java -cp com.android.tools.build/builder/*/*/builder-*.jar com.android.tools.r8.R8 --version
+```
+
+```bash
+java -cp com.android.tools.build/builder/*/*/builder-*.jar com.android.tools.r8.D8 --version
+```
+
+Instead of relying on the SDK's build-tools folder like we did in Chapter 1, AGP uses this cached artifact to access the `R8/D8` libraries programmatically.
+
+#### **`com.android.tools.build:apksig`**:
+This library provides the APK signing logic used by AGP.
+
+In `Chapter 1`, we used the standalone `apksigner` command. Under the hood, `apksigner` and AGP both rely on this same library.
+
+#### **`com.android/zipflinger`**:
+In `Chapter 1`, we used the standard Linux `zip -j` command to add `classes.dex` to our APK. We then had to run a separate tool, `zipalign`, to shift the bytes around so the Android OS could read them efficiently.
+
+The problem with generic ZIP tools is that they are **not** designed for incremental builds. As an app grows, the APK may contain multiple `.dex` files, and hundreds of compiled resources. If only one file changes, a traditional ZIP tool often has to rewrite most, or all, of the archive.
+
+`zipflinger` is a specialized ZIP library built by Google specifically for Android packaging. It is optimized for incremental updates, allowing AGP to modify APKs much more efficiently.
+
+It also handles alignment on the fly while writing the archive, so eliminates the need to run `zipalign` as a separate step afterward.
+
+#### **`com.android.tools.build:aapt2`**:
+
+Unlike the tools above, `aapt2` isn't a Java library. It's a platform-dependent, native C++ binary. It's wrapped in this artifact just so that it can be pulled as a Maven dependency by AGP.
+
+We can see the actual binary without unzipping the jar using the `unzip -l` command.
+
+```bash
+unzip -l com.android.tools.build/aapt2/*/*/aapt2-*-linux.jar
+```
+```text
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+        0  1980-02-01 00:00   META-INF/
+       25  1980-02-01 00:00   META-INF/MANIFEST.MF
+  6232264  1980-02-01 00:00   aapt2                👈
+   100861  1980-02-01 00:00   NOTICE
+---------                     -------
+  6333150                     4 files
+```
+
+Prior to AGP 3.2.0, `aapt2` was provided exclusively through `build-tools`. Starting with [AGP 3.2.0](https://developer.android.com/build/releases/agp-3-2-0-release-notes#behavior-changes), Google began distributing `aapt2` as a Maven artifact (`com.android.tools.build:aapt2`). This change allows AGP to bundle and use a specific version of `aapt2` with the latest fixes and features, without having to wait for the infrequent `build-tools` releases.
+
+<br>
+
+Of course, these are just a handful of the artifacts AGP pulls in. We focused on them because they correspond to tools we already used manually in previous chapters.
+
+If you browse through the cache, you’ll find dozens of other libraries for linting, Kotlin compilation, data binding, testing, and many other parts of the Android build process.
+
+Downloading hundreds of megabytes of build tooling can feel like overkill for our tiny Hello World app. But AGP wasn’t designed for toy projects, it was built to compile large, complex Android applications with hundreds of modules and millions of lines of code as efficiently as possible.
+
+Our small project doesn’t exercise all of that machinery, but it gives us a solid **mental model** for how the Android build system works under the hood.
+
+
+---
+
+### The Gradle Wrapper
+
+If you’ve ever generated a fresh project in Android Studio, you’ve probably noticed a few specific files sitting in the root directory: `gradlew`, `gradlew.bat`, and a `gradle/wrapper/` folder. Let's finally make sense of them.
+
+We have seen how AGP solves the SDK dependency problem by auto-downloading missing Android SDK components. This is a huge step toward making our build environment easily reproducible. But there's one last weak link in the chain: Gradle itself.
+
+What happens if I wrote this guide using Gradle 9.4, but you clone the repository and only have Gradle 8.0 installed on your machine? Your build might fail due to breaking changes or new syntax in our `build.gradle` file. You would be forced to manually install the correct Gradle version just to get started.
+
+This is exactly the problem the **Gradle Wrapper (`gradlew`)** solves.
+
+`gradlew` (or `gradlew.bar` on Windows) is a tiny script that you commit directly into your repository. Its only job is to look at a configuration file, see what version of Gradle the project *requires*, download it if it's missing, and then use that specific version to run your tasks.
+
+This guarantees that every developer on the team, and every CI/CD server in the cloud, uses the exact same version of the build tool.
+
+#### Generate the Wrapper
+
+We can add the Gradle Wrapper to the project with a single command:
+
+```bash
+gradle wrapper
+```
+
+This command will generate four new files:
+- `gradlew`: The executable script for Mac and Linux.
+- `gradlew.bat`: The batch script for Windows.
+- `gradle/wrapper/gradle-wrapper.jar`: A tiny Java library containing the logic to download Gradle.
+- `gradle/wrapper/gradle-wrapper.properties`: This is the configuration that tells the script which version of Gradle to download and where to download it.
+
+Inside `gradle-wrapper.properties`, you’ll find a line like:
+
+```
+distributionUrl=https\://services.gradle.org/distributions/gradle-9.4.1-bin.zip
+```
+
+#### How to use the Wrapper
+
+From this point on, we should stop using the globally installed `gradle` command and use `./gradlew` instead.
+
+When we run `./gradlew assembleDebug`:
+1. The `gradlew` script runs.
+2. It reads `gradle-wrapper.properties` and sees it needs Gradle 9.4.1.
+3. It checks `~/.gradle/wrapper/dists/` to see if that version is already downloaded.
+4. If not, it downloads it and caches it globally.
+5. It then uses that *specific*, downloaded Gradle 9.4.1 to run our `assembleDebug` task.
+
+The wrapper can be easily upgraded to a new version, let's say `9.5.0`, using the command:
+
+```bash
+./gradlew wrapper --gradle-version=9.5.0 && ./gradlew wrapper
+```
+
+
+By committing these files to Git, anyone can clone the project and build it with a single command, even if they’ve never installed Gradle before.
+
+Combined with AGP’s ability to auto-download missing SDK components, this gives us a highly reproducible build environment.
+
+The only remaining prerequisites are a few generic Android setup steps that are typically done once per machine:
+- Java
+- `cmdline-tools` (so sdkmanager is available)
+- `ANDROID_HOME` pointing to the SDK directory
+- accepted SDK licenses (to accept licenses we should run `sdkmanager --licenses`)
+
+Once those are in place, building newly cloned Android projects is as simple as:
+
+```bash
+./gradlew assembleDebug
+```
+
+The wrapper downloads the exact Gradle version required by the project, and AGP automatically provisions any missing Android SDK components needed by the build.
+
+That means cloning an open-source Android project and getting it to build is often as simple as running a single command. Pretty neat.
+
+---
+
+### What's Next?
+
+We’ve spent three chapters building Android app from the ground up.
+
+The whole point of this journey was to make Android Studio feel less intimidating.
+
+In the next chapter, we’ll finally open Android Studio and see how much of what we’ve learned carries over.
+
+My guess? A lot more than you might expect.
+
