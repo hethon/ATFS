@@ -183,7 +183,7 @@ The cleaned-up file should look exactly like this:
 
 ### Listing the new tasks
 
-Let's try to see the list of all the tasks available to our project. We should able to see new tasks that are added by AGP.
+Let's try to see the list of all the tasks available to our project. We should be able to see the new tasks that are added by AGP.
 
 ```bash
 gradle tasks --all --info
@@ -196,7 +196,7 @@ Before Gradle can list the tasks, it has to read our `build.gradle` file. When i
 
 Because this is the first time we are running AGP on this machine, you will see a massive list of files being downloaded, which may take a few minutes.
 
-We will investigate what got downloaded here in a separate section.
+We will inspect exactly what was downloaded in a later section.
 
 ### Running an AGP task
 
@@ -222,7 +222,7 @@ Let's run the build task and keep the `--info` flag on so we can watch AGP resol
 gradle assembleDebug --info
 ```
 
-The configuration resolution won't start right away instead you will see these lines in the logs:
+Configuration resolution does not start immediately. Instead, you will first see these lines in the logs:
 
 ```text
 Preparing "Install Android SDK Build-Tools 36 v.36.0.0".
@@ -240,7 +240,7 @@ This behavior highlights another massive advantage of AGP: **It auto-downloads m
 
 If we hadn't manually installed the `platforms;android-34` libraries, AGP would auto-download them. If we hadn't installed `platform-tools`, it would auto-download it.
 
-This makes replicating build environments easy. A new contributor can clone your repository, run `gradle assembleDebug`, and AGP will guarantee they have the exact right SDK components installed to build the app.
+This makes replicating build environments easy. A new contributor can clone our repository, run `gradle assembleDebug`, and AGP will guarantee they have the exact right SDK components installed to build the app.
 
 > <br>
 >
